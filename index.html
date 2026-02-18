@@ -229,7 +229,6 @@
           <div class="input-wrapper">
             <input type="number" id="loan-duration" min="30" max="365"
                    placeholder="e.g. 90" value="90" required />
-            <span class="input-suffix">days</span>
           </div>
           <span class="field-error" id="error-duration"></span>
           <span class="field-hint">Min: 30 days · Max: 365 days</span>
@@ -254,7 +253,6 @@
           </label>
           <div class="input-wrapper input-readonly">
             <input type="text" id="interest-rate" readonly value="7.50%" />
-            <span class="input-suffix">per year</span>
           </div>
           <span class="field-hint" id="rate-hint">Rate adjusts with loan duration</span>
         </div>
@@ -283,7 +281,7 @@
           <span class="label-opt"> — confirmation sent here</span>
         </label>
         <div class="input-wrapper email-input-wrapper">
-          <span class="email-input-icon">✉</span>
+          <span class="email-input-icon"></span>
           <input type="email" id="loan-email" placeholder="you@example.com"
                  autocomplete="email" />
           <span class="email-input-badge" id="email-status-badge"></span>
@@ -608,4 +606,5 @@
 
 <script src="script.js"></script>
 </body>
+
 </html>
