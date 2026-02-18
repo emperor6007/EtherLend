@@ -621,16 +621,18 @@ function onWalletConnected() {
 /** Update UI elements based on wallet state */
 function updateWalletUI() {
   const isConnected = State.walletConnected;
+
   // Pre-fill email if saved in State
   if (isConnected && State.userEmail) {
     const emailInput = document.getElementById('loan-email');
     if (emailInput && !emailInput.value) emailInput.value = State.userEmail;
   }
 
-  // Nav connect button — toggle between address text and dropdown
-  const navBtn        = document.getElementById('nav-connect-btn');
-  const dropdownAddr  = document.getElementById('wallet-dropdown-addr');
-
+  // ── Desktop nav wallet button ──────────────────────────────────────────────
+  // (On mobile ≤600px this whole wrapper is hidden via CSS so it never
+  //  competes with the hamburger button for space.)
+  const navBtn       = document.getElementById('nav-connect-btn');
+  const dropdownAddr = document.getElementById('wallet-dropdown-addr');
   if (navBtn) {
     if (isConnected) {
       navBtn.textContent = truncateAddress(State.address);
@@ -640,19 +642,33 @@ function updateWalletUI() {
       navBtn.classList.remove('connected');
     }
   }
-  // Always close dropdown on state change
   closeWalletDropdown();
   if (dropdownAddr) dropdownAddr.textContent = State.address || '';
 
-  // Mobile connect button
-  const mobileConnectBtn     = document.getElementById('mobile-connect-btn');
-  const mobileDisconnectBtn  = document.getElementById('mobile-disconnect-btn');
+  // ── Mobile menu wallet controls ────────────────────────────────────────────
+  // Status pill: shows address + green dot when connected, hidden when not
+  const mobileStatus     = document.getElementById('mobile-wallet-status');
+  const mobileStatusAddr = document.getElementById('mobile-wallet-status-addr');
+  if (mobileStatus) {
+    if (isConnected) {
+      mobileStatus.classList.remove('hidden');
+      if (mobileStatusAddr) mobileStatusAddr.textContent = truncateAddress(State.address);
+    } else {
+      mobileStatus.classList.add('hidden');
+      if (mobileStatusAddr) mobileStatusAddr.textContent = '—';
+    }
+  }
+
+  // Mobile connect button: when connected hide it — disconnect btn takes over
+  const mobileConnectBtn    = document.getElementById('mobile-connect-btn');
+  const mobileDisconnectBtn = document.getElementById('mobile-disconnect-btn');
   if (mobileConnectBtn) {
     if (isConnected) {
-      mobileConnectBtn.textContent = truncateAddress(State.address);
-      mobileConnectBtn.classList.add('connected');
+      // Hide connect btn — user uses disconnect btn instead
+      mobileConnectBtn.style.display = 'none';
     } else {
-      mobileConnectBtn.textContent = 'Connect Wallet';
+      mobileConnectBtn.style.display = '';
+      mobileConnectBtn.textContent   = 'Connect Wallet';
       mobileConnectBtn.classList.remove('connected');
     }
   }
@@ -660,7 +676,7 @@ function updateWalletUI() {
     mobileDisconnectBtn.style.display = isConnected ? 'block' : 'none';
   }
 
-  // Hero connect button
+  // ── Hero connect button ────────────────────────────────────────────────────
   const heroBtn = document.getElementById('hero-connect-btn');
   if (heroBtn) {
     if (isConnected) {
@@ -672,30 +688,20 @@ function updateWalletUI() {
     }
   }
 
-  // Loan form gate
+  // ── Loan form gate ─────────────────────────────────────────────────────────
   const walletGate = document.getElementById('wallet-gate');
   const loanForm   = document.getElementById('loan-form');
   if (walletGate && loanForm) {
-    if (isConnected) {
-      walletGate.style.display = 'none';
-      loanForm.style.display   = 'block';
-    } else {
-      walletGate.style.display = 'flex';
-      loanForm.style.display   = 'none';
-    }
+    walletGate.style.display = isConnected ? 'none' : 'flex';
+    loanForm.style.display   = isConnected ? 'block' : 'none';
   }
 
-  // History gate
+  // ── History gate ───────────────────────────────────────────────────────────
   const historyGate = document.getElementById('history-gate');
   const historyWrap = document.getElementById('history-table-wrap');
   if (historyGate && historyWrap) {
-    if (isConnected) {
-      historyGate.style.display = 'none';
-      historyWrap.style.display = 'block';
-    } else {
-      historyGate.style.display = 'flex';
-      historyWrap.style.display = 'none';
-    }
+    historyGate.style.display = isConnected ? 'none' : 'flex';
+    historyWrap.style.display = isConnected ? 'block' : 'none';
   }
 }
 
