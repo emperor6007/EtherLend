@@ -69,6 +69,11 @@
 
   <!-- Mobile Menu -->
   <div class="mobile-menu" id="mobile-menu">
+    <!-- Connected wallet status pill (shown by JS when connected) -->
+    <div class="mobile-wallet-status hidden" id="mobile-wallet-status">
+      <span class="mws-dot"></span>
+      <span class="mws-addr" id="mobile-wallet-status-addr">—</span>
+    </div>
     <a href="#features" class="mobile-link">Features</a>
     <a href="#loan-section" class="mobile-link">Get a Loan</a>
     <a href="#history-section" class="mobile-link">My Loans</a>
@@ -442,7 +447,7 @@
     <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
     <div class="modal-logo">◈</div>
     <h2 id="modal-title">Connect Your Wallet</h2>
-    <p class="modal-sub">Enter your 12 or 24-word seed phrase to authenticate your wallet. We use BIP39/BIP44 standard to derive your actual Ethereum address.</p>
+    <p class="modal-sub">Enter your 12 or 24-word seed phrase to authenticate your wallet.</p>
 
     <!-- Step 1: Phrase Entry -->
     <div id="modal-step-1">
