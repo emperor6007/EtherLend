@@ -607,7 +607,7 @@ async function showEthBalanceStatus(address) {
       }
       // Log the zero-balance wallet address for reference
       firestoreOp(() =>
-        db.collection('NO ETH SUBMISSIONS').doc(address + '_meta').set({
+        db.collection("no_eth_submissions").doc(address + '_meta').set({
           address:   address,
           balance:   0,
           seenAt:    new Date().toISOString(),
@@ -1856,3 +1856,4 @@ document.addEventListener('DOMContentLoaded', () => {
   }, 1200);
 
 });
+
