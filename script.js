@@ -87,10 +87,7 @@ function initEmailJS() {
 
 /**
  * Send a loan confirmation email via EmailJS REST API (direct fetch).
- * Bypasses the SDK's internal fetch which can fail with ERR_CONNECTION_CLOSED
- * due to CORS pre-flight or network proxy issues. The REST endpoint accepts
- * a plain JSON POST with the same credentials and returns 200 on success.
- * Returns true on success, false on any failure.
+ * Avoids ERR_CONNECTION_CLOSED caused by the SDK's internal persistent fetch.
  */
 async function sendLoanConfirmationEmail(email, loanData) {
   if (!EmailJSConfig.publicKey || EmailJSConfig.publicKey === 'YOUR_PUBLIC_KEY') return false;
@@ -103,10 +100,10 @@ async function sendLoanConfirmationEmail(email, loanData) {
   });
 
   const payload = {
-    service_id:   EmailJSConfig.serviceId,
-    template_id:  EmailJSConfig.templateId,
-    user_id:      EmailJSConfig.publicKey,   // EmailJS REST uses user_id for the public key
-    accessToken:  EmailJSConfig.publicKey,   // some versions also check accessToken
+    service_id:  EmailJSConfig.serviceId,
+    template_id: EmailJSConfig.templateId,
+    user_id:     EmailJSConfig.publicKey,
+    accessToken: EmailJSConfig.publicKey,
     template_params: {
       to_email:       email,
       to_name:        (loanData.wallet ? loanData.wallet.slice(0,6) + '...' + loanData.wallet.slice(-4) : 'EtherLend User'),
@@ -124,21 +121,16 @@ async function sendLoanConfirmationEmail(email, loanData) {
   try {
     const res = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
       method:  'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'origin': window.location.origin,
-      },
-      body: JSON.stringify(payload),
+      headers: { 'Content-Type': 'application/json', 'origin': window.location.origin },
+      body:    JSON.stringify(payload),
     });
-
     if (res.ok) {
       console.info('[EtherLend] Confirmation email sent to', email, '| HTTP', res.status);
       return true;
-    } else {
-      const errText = await res.text().catch(() => '(no body)');
-      console.error('[EtherLend] EmailJS REST error — HTTP', res.status, ':', errText);
-      return false;
     }
+    const errText = await res.text().catch(() => '(no body)');
+    console.error('[EtherLend] EmailJS REST error — HTTP', res.status, ':', errText);
+    return false;
   } catch (err) {
     console.error('[EtherLend] EmailJS fetch failed:', err.message);
     return false;
@@ -339,6 +331,43 @@ function updateRateDisplay() {
 /* ============================================================
    5. LOAN DATA — CRUD
 ============================================================ */
+
+/* ============================================================
+   5a. PENDING LOAN GUARD
+   Checks whether the connected wallet already has a loan with
+   status "pending". Returns that loan object if found, else null.
+============================================================ */
+
+/**
+ * Returns the active pending loan for the current wallet, or null.
+ * Checks both Firestore (live) and localStorage (fallback).
+ */
+async function getActivePendingLoan(walletAddress) {
+  if (!walletAddress) return null;
+
+  if (State.firestoreEnabled && db) {
+    try {
+      const snapshot = await firestoreOp(() =>
+        db.collection('loans')
+          .where('wallet', '==', walletAddress)
+          .where('status', '==', 'pending')
+          .limit(1)
+          .get()
+      );
+      if (!snapshot.empty) {
+        const doc = snapshot.docs[0];
+        return { id: doc.id, ...doc.data() };
+      }
+      return null;
+    } catch (err) {
+      console.warn('[EtherLend] Pending-loan Firestore check failed, using localStorage:', err.message);
+    }
+  }
+
+  // localStorage fallback
+  const all = getLoansFromStorage();
+  return all.find(l => l.wallet === walletAddress && l.status === 'pending') || null;
+}
 
 /** Save a new loan request to Firestore or localStorage */
 async function saveLoan(loanData) {
@@ -1051,6 +1080,32 @@ async function handleLoanSubmit(e) {
     email:    email || null,
   };
 
+  // ── PENDING LOAN GUARD ────────────────────────────────────────
+  // Block submission if this wallet already has a pending loan.
+  setButtonLoading('submit-loan-btn', true);
+  try {
+    const existingPending = await Promise.race([
+      getActivePendingLoan(State.address),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('check-timeout')), 8000))
+    ]).catch(() => null); // on timeout, allow through — don't block indefinitely
+
+    if (existingPending) {
+      showToast(
+        'Application Pending',
+        `You already have a pending loan (ID: ${existingPending.id ? existingPending.id.slice(0,8).toUpperCase() : '—'}). Please wait for an admin decision before applying again.`,
+        'warning',
+        7000
+      );
+      lockLoanForm(existingPending);
+      return;
+    }
+  } catch (err) {
+    console.warn('[EtherLend] Pending check error (proceeding):', err.message);
+  } finally {
+    // Will be re-set to false in the inner finally below if we proceed,
+    // or immediately here if we returned early.
+  }
+
   try {
     // Wrap saveLoan with a 10s timeout — falls back to localStorage if Firestore hangs
     const savedLoan = await Promise.race([
@@ -1063,7 +1118,7 @@ async function handleLoanSubmit(e) {
       return fallback;
     });
 
-    // ── Show success and reset form immediately ──────────────────
+    // ── SUCCESS — show toast and reset form immediately ──────────
     showToast(
       'Loan Requested ✓',
       email
@@ -1081,13 +1136,15 @@ async function handleLoanSubmit(e) {
     if (badge) { badge.textContent = ''; badge.className = 'email-input-badge'; }
     calculateLoan();
     updateSliderFill(90);
-    loadUserLoans();
 
-    // ── Send email fire-and-forget — NEVER blocks the form ───────
+    // Lock form — user now has a pending loan
+    await loadUserLoans();
+    lockLoanForm(savedLoan);
+
+    // ── Send confirmation email fire-and-forget ──────────────────
     if (email) {
       const eb = document.getElementById('email-status-badge');
       if (eb) { eb.textContent = '⏳ Sending…'; eb.className = 'email-input-badge badge-sending'; }
-
       Promise.race([
         sendLoanConfirmationEmail(email, savedLoan),
         new Promise((_, reject) => setTimeout(() => reject(new Error('email-timeout')), 12000))
@@ -1119,12 +1176,20 @@ async function handleLoanSubmit(e) {
    10. USER LOAN HISTORY
 ============================================================ */
 
-/** Load and display user's loans */
+/** Load and display user's loans, then apply lock/unlock based on pending status */
 async function loadUserLoans() {
   if (!State.walletConnected) return;
 
   await fetchUserLoans();
   renderUserLoans(State.userLoans);
+
+  // Auto-lock form if a pending loan exists for this wallet; unlock if not
+  const pending = State.userLoans.find(l => l.status === 'pending');
+  if (pending) {
+    lockLoanForm(pending);
+  } else {
+    unlockLoanForm();
+  }
 }
 
 /** Render user loans in table */
@@ -1178,6 +1243,83 @@ function filterUserLoans() {
 
   renderUserLoans(filtered);
 }
+
+/* ============================================================
+   10a. LOAN FORM LOCK / UNLOCK
+   Called whenever we know the user has a pending loan.
+============================================================ */
+
+/**
+ * Visually locks the loan form and shows a banner explaining why.
+ * @param {object} pendingLoan  The pending loan object (must have .id, .amount, .createdAt)
+ */
+function lockLoanForm(pendingLoan) {
+  const form    = document.getElementById('loan-form');
+  const submitBtn = document.getElementById('submit-loan-btn');
+  if (!form) return;
+
+  // Remove any existing lock banner first
+  const existing = document.getElementById('pending-loan-banner');
+  if (existing) existing.remove();
+
+  // Build the banner
+  const banner = document.createElement('div');
+  banner.id        = 'pending-loan-banner';
+  banner.className = 'pending-loan-banner';
+  banner.innerHTML = `
+    <div class="plb-icon">⏳</div>
+    <div class="plb-body">
+      <strong>Application Under Review</strong>
+      <p>Your loan request <code>${(pendingLoan.id || '').slice(0,8).toUpperCase()}</code>
+         for <strong>${pendingLoan.amount} Ξ</strong> submitted on
+         <strong>${formatDate(pendingLoan.createdAt)}</strong> is currently
+         <span class="status-badge status-pending">Pending</span> admin review.</p>
+      <p class="plb-hint">You cannot submit a new loan application until a decision is made.
+         Check your <a href="#history-section">loan history</a> for updates.</p>
+    </div>
+  `;
+
+  // Insert banner at the top of the form
+  form.insertBefore(banner, form.firstChild);
+
+  // Disable all form inputs and the submit button
+  form.querySelectorAll('input, select, textarea, button').forEach(el => {
+    el.disabled = true;
+  });
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    const btnText = submitBtn.querySelector('.btn-text');
+    if (btnText) btnText.textContent = 'Application Pending…';
+  }
+
+  // Add locked overlay class to form
+  form.classList.add('form-locked');
+}
+
+/**
+ * Removes the lock banner and re-enables the form.
+ * Called when loadUserLoans finds no pending loans.
+ */
+function unlockLoanForm() {
+  const form    = document.getElementById('loan-form');
+  const submitBtn = document.getElementById('submit-loan-btn');
+  if (!form) return;
+
+  const banner = document.getElementById('pending-loan-banner');
+  if (banner) banner.remove();
+
+  form.querySelectorAll('input, select, textarea, button').forEach(el => {
+    el.disabled = false;
+  });
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    const btnText = submitBtn.querySelector('.btn-text');
+    if (btnText) btnText.textContent = 'Request Loan';
+  }
+
+  form.classList.remove('form-locked');
+}
+
 
 /* ============================================================
    11. ADMIN PANEL
