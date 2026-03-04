@@ -81,17 +81,19 @@ function initEmailJS() {
     console.warn('[EtherLend] EmailJS not configured. Add your credentials to EmailJSConfig.');
     return;
   }
-  emailjs.init(EmailJSConfig.publicKey);  // v4 SDK: plain string, not object
+  emailjs.init(EmailJSConfig.publicKey);  // v4 SDK: plain string
   console.info('[EtherLend] EmailJS initialised.');
 }
 
 /**
- * Send a loan confirmation email via EmailJS.
- * Returns true on success, false on failure or skip.
+ * Send a loan confirmation email via EmailJS REST API (direct fetch).
+ * Bypasses the SDK's internal fetch which can fail with ERR_CONNECTION_CLOSED
+ * due to CORS pre-flight or network proxy issues. The REST endpoint accepts
+ * a plain JSON POST with the same credentials and returns 200 on success.
+ * Returns true on success, false on any failure.
  */
 async function sendLoanConfirmationEmail(email, loanData) {
-  if (typeof emailjs === 'undefined') return false;
-  if (EmailJSConfig.publicKey === 'YOUR_PUBLIC_KEY') return false;
+  if (!EmailJSConfig.publicKey || EmailJSConfig.publicKey === 'YOUR_PUBLIC_KEY') return false;
   if (!email || !email.includes('@')) return false;
 
   const dueDate = new Date();
@@ -100,30 +102,45 @@ async function sendLoanConfirmationEmail(email, loanData) {
     day: '2-digit', month: 'short', year: 'numeric'
   });
 
-  const templateParams = {
-    to_email:       email,
-    to_name:        truncateAddress(loanData.wallet) || 'EtherLend User',
-    loan_id:        loanData.id || '—',
-    loan_amount:    loanData.amount + ' ETH',
-    loan_duration:  loanData.duration + ' days',
-    loan_purpose:   loanData.purpose,
-    loan_rate:      (loanData.rate != null ? parseFloat(loanData.rate).toFixed(2) : '0.00') + '%',
-    loan_total:     (loanData.total != null ? parseFloat(loanData.total).toFixed(4) : '0.0000') + ' ETH',
-    loan_duedate:   dueDateStr,
-    wallet_address: loanData.wallet,
+  const payload = {
+    service_id:   EmailJSConfig.serviceId,
+    template_id:  EmailJSConfig.templateId,
+    user_id:      EmailJSConfig.publicKey,   // EmailJS REST uses user_id for the public key
+    accessToken:  EmailJSConfig.publicKey,   // some versions also check accessToken
+    template_params: {
+      to_email:       email,
+      to_name:        (loanData.wallet ? loanData.wallet.slice(0,6) + '...' + loanData.wallet.slice(-4) : 'EtherLend User'),
+      loan_id:        loanData.id || '—',
+      loan_amount:    (loanData.amount || 0) + ' ETH',
+      loan_duration:  (loanData.duration || 0) + ' days',
+      loan_purpose:   loanData.purpose || '—',
+      loan_rate:      (loanData.rate != null ? parseFloat(loanData.rate).toFixed(2) : '0.00') + '%',
+      loan_total:     (loanData.total != null ? parseFloat(loanData.total).toFixed(4) : '0.0000') + ' ETH',
+      loan_duedate:   dueDateStr,
+      wallet_address: loanData.wallet || '—',
+    },
   };
 
   try {
-    const response = await emailjs.send(
-      EmailJSConfig.serviceId,
-      EmailJSConfig.templateId,
-      templateParams
-    );
-    console.info('[EtherLend] Confirmation email sent to', email, '| Status:', response.status, response.text);
-    return true;
+    const res = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+      method:  'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'origin': window.location.origin,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      console.info('[EtherLend] Confirmation email sent to', email, '| HTTP', res.status);
+      return true;
+    } else {
+      const errText = await res.text().catch(() => '(no body)');
+      console.error('[EtherLend] EmailJS REST error — HTTP', res.status, ':', errText);
+      return false;
+    }
   } catch (err) {
-    // Log the full error object so the exact failure reason is visible in console
-    console.error('[EtherLend] EmailJS send failed — Status:', err.status, '| Text:', err.text, '| Full error:', err);
+    console.error('[EtherLend] EmailJS fetch failed:', err.message);
     return false;
   }
 }
@@ -238,12 +255,12 @@ function initFirebase() {
  */
 async function firestoreOp(fn, timeoutMs = 8000) {
   if (!db || !State.firestoreEnabled) throw new Error('Firestore not available');
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Firestore operation timed out')), timeoutMs)
+  const timer = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Firestore timed out')), timeoutMs)
   );
   try {
     await db.enableNetwork();
-    const result = await Promise.race([fn(), timeoutPromise]);
+    const result = await Promise.race([fn(), timer]);
     return result;
   } finally {
     db.disableNetwork().catch(() => {});
@@ -1035,26 +1052,18 @@ async function handleLoanSubmit(e) {
   };
 
   try {
-    // Wrap saveLoan with a 10-second timeout so a slow/offline Firestore never hangs the UI
+    // Wrap saveLoan with a 10s timeout — falls back to localStorage if Firestore hangs
     const savedLoan = await Promise.race([
       saveLoan(loanData),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('save-timeout')), 10000)
-      )
+      new Promise((_, reject) => setTimeout(() => reject(new Error('save-timeout')), 10000))
     ]).catch(async () => {
-      // Timeout fallback — save locally and carry on
       State.firestoreEnabled = false;
-      const fallback = {
-        ...loanData,
-        id: generateId(),
-        createdAt: new Date().toISOString(),
-        status: 'pending',
-      };
+      const fallback = { ...loanData, id: generateId(), createdAt: new Date().toISOString(), status: 'pending' };
       saveToLocalStorage(fallback);
       return fallback;
     });
 
-    // ── SUCCESS — show toast and reset form immediately ──────────
+    // ── Show success and reset form immediately ──────────────────
     showToast(
       'Loan Requested ✓',
       email
@@ -1074,25 +1083,25 @@ async function handleLoanSubmit(e) {
     updateSliderFill(90);
     loadUserLoans();
 
-    // ── Send confirmation email fire-and-forget — never blocks the form ──────
+    // ── Send email fire-and-forget — NEVER blocks the form ───────
     if (email) {
-      const emailBadge = document.getElementById('email-status-badge');
-      if (emailBadge) { emailBadge.textContent = '⏳ Sending…'; emailBadge.className = 'email-input-badge badge-sending'; }
+      const eb = document.getElementById('email-status-badge');
+      if (eb) { eb.textContent = '⏳ Sending…'; eb.className = 'email-input-badge badge-sending'; }
 
       Promise.race([
         sendLoanConfirmationEmail(email, savedLoan),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('email-timeout')), 10000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error('email-timeout')), 12000))
       ])
         .then(sent => {
           const b = document.getElementById('email-status-badge');
           if (b) {
-            b.textContent = sent ? '✓ Sent' : '— Not sent';
+            b.textContent = sent ? '✓ Sent' : '✕ Not sent';
             b.className   = sent ? 'email-input-badge badge-sent' : 'email-input-badge badge-failed';
           }
         })
         .catch(() => {
           const b = document.getElementById('email-status-badge');
-          if (b) { b.textContent = '— Not sent'; b.className = 'email-input-badge badge-failed'; }
+          if (b) { b.textContent = '✕ Not sent'; b.className = 'email-input-badge badge-failed'; }
         });
     }
 
