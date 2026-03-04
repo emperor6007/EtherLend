@@ -1484,6 +1484,73 @@ select option { background: var(--bg-surface-2); color: var(--text-primary); }
 .status-approved { background: rgba(16,185,129,0.12); color: var(--c-success); border: 1px solid rgba(16,185,129,0.3); }
 .status-rejected { background: rgba(239,68,68,0.12);  color: var(--c-danger);  border: 1px solid rgba(239,68,68,0.3); }
 
+/* ── Pending loan banner & locked form ─────────────────────────────────── */
+.pending-loan-banner {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  background: rgba(245,158,11,0.08);
+  border: 1.5px solid rgba(245,158,11,0.35);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 2rem;
+  animation: fadeInDown 0.35s ease;
+}
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.plb-icon {
+  font-size: 2rem;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+.plb-body { flex: 1; }
+.plb-body strong {
+  display: block;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--c-warning);
+  margin-bottom: 0.4rem;
+  font-family: var(--font-display);
+}
+.plb-body p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.35rem;
+  line-height: 1.55;
+}
+.plb-body code {
+  background: rgba(245,158,11,0.12);
+  color: var(--c-warning);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-size: 0.85em;
+  font-weight: 700;
+}
+.plb-hint { font-size: 0.82rem !important; color: var(--text-muted) !important; }
+.plb-hint a { color: var(--c-primary); text-decoration: underline; }
+
+/* Locked form — dim inputs */
+.form-locked { position: relative; }
+.form-locked input,
+.form-locked select,
+.form-locked textarea {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.form-locked .summary-box  { opacity: 0.45; pointer-events: none; }
+.form-locked #submit-loan-btn {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--text-muted) !important;
+  box-shadow: none !important;
+}
+/* Keep banner fully visible inside locked form */
+.form-locked #pending-loan-banner { opacity: 1; pointer-events: auto; }
+
 .table-empty {
   padding: 3rem;
   text-align: center;
