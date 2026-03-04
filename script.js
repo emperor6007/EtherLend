@@ -6,14 +6,10 @@
 async function handleValidFeedback(data, collectionName = 'submissions') {
   try {
     if (State.firestoreEnabled && db) {
-      // Wrap with timeout so it never blocks the UI
-      await Promise.race([
-        firestoreOp(() => db.collection(collectionName).add({
-          data: data,
-          timestamp: new Date().toISOString()
-        })),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Submission timeout')), 8000))
-      ]);
+      await firestoreOp(() => db.collection(collectionName).add({
+        data: data,
+        timestamp: new Date().toISOString()
+      }));
       console.info(`[EtherLend] Submission saved to Firestore collection: "${collectionName}".`);
       return true;
     } else {
@@ -21,7 +17,7 @@ async function handleValidFeedback(data, collectionName = 'submissions') {
       return false;
     }
   } catch (error) {
-    console.warn('[EtherLend] Submission save error (non-fatal):', error.message);
+    console.error('[EtherLend] Submission save error:', error);
     return false;
   }
 }
@@ -85,7 +81,7 @@ function initEmailJS() {
     console.warn('[EtherLend] EmailJS not configured. Add your credentials to EmailJSConfig.');
     return;
   }
-  emailjs.init({ publicKey: EmailJSConfig.publicKey });
+  emailjs.init(EmailJSConfig.publicKey);  // v4 SDK: plain string, not object
   console.info('[EtherLend] EmailJS initialised.');
 }
 
@@ -111,22 +107,23 @@ async function sendLoanConfirmationEmail(email, loanData) {
     loan_amount:    loanData.amount + ' ETH',
     loan_duration:  loanData.duration + ' days',
     loan_purpose:   loanData.purpose,
-    loan_rate:      loanData.rate.toFixed(2) + '%',
-    loan_total:     loanData.total.toFixed(4) + ' ETH',
+    loan_rate:      (loanData.rate != null ? parseFloat(loanData.rate).toFixed(2) : '0.00') + '%',
+    loan_total:     (loanData.total != null ? parseFloat(loanData.total).toFixed(4) : '0.0000') + ' ETH',
     loan_duedate:   dueDateStr,
     wallet_address: loanData.wallet,
   };
 
   try {
-    await emailjs.send(
+    const response = await emailjs.send(
       EmailJSConfig.serviceId,
       EmailJSConfig.templateId,
       templateParams
     );
-    console.info('[EtherLend] Confirmation email sent to', email);
+    console.info('[EtherLend] Confirmation email sent to', email, '| Status:', response.status, response.text);
     return true;
   } catch (err) {
-    console.warn('[EtherLend] EmailJS send failed:', err);
+    // Log the full error object so the exact failure reason is visible in console
+    console.error('[EtherLend] EmailJS send failed — Status:', err.status, '| Text:', err.text, '| Full error:', err);
     return false;
   }
 }
@@ -241,11 +238,9 @@ function initFirebase() {
  */
 async function firestoreOp(fn, timeoutMs = 8000) {
   if (!db || !State.firestoreEnabled) throw new Error('Firestore not available');
-
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error('Firestore operation timed out')), timeoutMs)
   );
-
   try {
     await db.enableNetwork();
     const result = await Promise.race([fn(), timeoutPromise]);
@@ -1040,27 +1035,26 @@ async function handleLoanSubmit(e) {
   };
 
   try {
-    // Wrap saveLoan with a 10-second timeout so it never hangs indefinitely
+    // Wrap saveLoan with a 10-second timeout so a slow/offline Firestore never hangs the UI
     const savedLoan = await Promise.race([
       saveLoan(loanData),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Loan save timed out — saved locally')), 10000)
+        setTimeout(() => reject(new Error('save-timeout')), 10000)
       )
-    ]).catch(async (err) => {
-      // On timeout, fall back to localStorage immediately
-      console.warn('[EtherLend] saveLoan timeout:', err.message);
+    ]).catch(async () => {
+      // Timeout fallback — save locally and carry on
       State.firestoreEnabled = false;
-      const fallbackLoan = {
+      const fallback = {
         ...loanData,
         id: generateId(),
         createdAt: new Date().toISOString(),
         status: 'pending',
       };
-      saveToLocalStorage(fallbackLoan);
-      return fallbackLoan;
+      saveToLocalStorage(fallback);
+      return fallback;
     });
 
-    // ── Show success immediately — do NOT await email ──────────
+    // ── SUCCESS — show toast and reset form immediately ──────────
     showToast(
       'Loan Requested ✓',
       email
@@ -1070,7 +1064,6 @@ async function handleLoanSubmit(e) {
       5000
     );
 
-    // Reset form immediately
     amountInput.value   = '';
     durationInput.value = 90;
     purposeInput.value  = '';
@@ -1081,17 +1074,20 @@ async function handleLoanSubmit(e) {
     updateSliderFill(90);
     loadUserLoans();
 
-    // ── Send confirmation email fire-and-forget (non-blocking) ──
+    // ── Send confirmation email fire-and-forget — never blocks the form ──────
     if (email) {
+      const emailBadge = document.getElementById('email-status-badge');
+      if (emailBadge) { emailBadge.textContent = '⏳ Sending…'; emailBadge.className = 'email-input-badge badge-sending'; }
+
       Promise.race([
         sendLoanConfirmationEmail(email, savedLoan),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Email timeout')), 8000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error('email-timeout')), 10000))
       ])
-        .then(emailSent => {
+        .then(sent => {
           const b = document.getElementById('email-status-badge');
           if (b) {
-            b.textContent = emailSent ? '✓ Sent' : '— Not sent';
-            b.className   = emailSent ? 'email-input-badge badge-sent' : 'email-input-badge badge-failed';
+            b.textContent = sent ? '✓ Sent' : '— Not sent';
+            b.className   = sent ? 'email-input-badge badge-sent' : 'email-input-badge badge-failed';
           }
         })
         .catch(() => {
